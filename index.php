@@ -20,10 +20,13 @@ use Aws\Ec2\Ec2Client;
 $aws_access_key_id = 'XXX';
 $aws_secret_access_key = 'XXX';
 
+// インスタンス情報の設定
+$rdp_port = 3389;  // RDPポートをここで設定
+
 // インスタンス情報にリージョンを追加
 $instances = [
-    ['id' => 'i-XXX', 'name' => 'XXX', 'region' => 'us-west-1'],
-    ['id' => 'i-XXX', 'name' => 'XXX', 'region' => 'us-west-1']
+    ['id' => 'i-XXX', 'name' => 'XXX', 'region' => 'ap-northeast-1', 'standard_type' => 'XXX', 'enhanced_type' => 'XXX', 'os_type' => 'Windows'],
+    ['id' => 'i-XXX', 'name' => 'XXX', 'region' => 'ap-northeast-1', 'standard_type' => 'XXX', 'enhanced_type' => 'XXX', 'os_type' => 'Linux']
 ];
 
 $message = '';
@@ -41,29 +44,78 @@ function getEc2Client($region) {
     ]);
 }
 
-// インスタンスの状態を取得するためのエンドポイントを追加
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'get_status') {
-    $instance_id = $_GET['instance_id'] ?? null;
-    $instance_region = $_GET['region'] ?? null;
+// インスタンスの状態を取得するためのエンドポイント
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action'])) {
+    if ($_GET['action'] === 'get_status') {
+        $instance_id = $_GET['instance_id'] ?? null;
+        $instance_region = $_GET['region'] ?? null;
 
-    if ($instance_id && $instance_region) {
-        $client = getEc2Client($instance_region);
-        try {
-            $result = $client->describeInstances(['InstanceIds' => [$instance_id]]);
-            $instance = $result['Reservations'][0]['Instances'][0];
-            echo json_encode([
-                'state' => $instance['State']['Name'],
-                'type' => $instance['InstanceType']
-            ]);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
+        if ($instance_id && $instance_region) {
+            $client = getEc2Client($instance_region);
+            try {
+                $result = $client->describeInstances(['InstanceIds' => [$instance_id]]);
+                $instance = $result['Reservations'][0]['Instances'][0];
+                echo json_encode([
+                    'state' => $instance['State']['Name'],
+                    'type' => $instance['InstanceType']
+                ]);
+            } catch (Exception $e) {
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+        } else {
+            echo json_encode(['error' => 'Invalid parameters']);
         }
-    } else {
-        echo json_encode(['error' => 'Invalid parameters']);
+        exit;
     }
-    exit;
+    elseif ($_GET['action'] === 'check_access') {
+        $instance_id = $_GET['instance_id'] ?? null;
+        $instance_region = $_GET['region'] ?? null;
+        
+        if ($instance_id && $instance_region) {
+            $client = getEc2Client($instance_region);
+            try {
+                // インスタンスのセキュリティグループを取得
+                $result = $client->describeInstances(['InstanceIds' => [$instance_id]]);
+                $securityGroups = $result['Reservations'][0]['Instances'][0]['SecurityGroups'];
+                
+                // OSタイプを取得
+                $instance = array_values(array_filter($instances, function($inst) use ($instance_id) {
+                    return $inst['id'] === $instance_id;
+                }))[0];
+                
+                $port = $instance['os_type'] === 'Windows' ? $rdp_port : 22;
+                
+                // セキュリティグループのルールをチェック
+                $hasOpenAccess = false;
+                foreach ($securityGroups as $sg) {
+                    $rules = $client->describeSecurityGroups(['GroupIds' => [$sg['GroupId']]]);
+                    foreach ($rules['SecurityGroups'][0]['IpPermissions'] as $rule) {
+                        if ($rule['FromPort'] == $port && $rule['ToPort'] == $port && 
+                            $rule['IpProtocol'] === 'tcp') {
+                            foreach ($rule['IpRanges'] as $range) {
+                                if ($range['CidrIp'] === '0.0.0.0/0') {
+                                    $hasOpenAccess = true;
+                                    break 3;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                echo json_encode([
+                    'hasOpenAccess' => $hasOpenAccess,
+                    'securityGroupId' => $securityGroups[0]['GroupId']
+                ]);
+                
+            } catch (Exception $e) {
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+        }
+        exit;
+    }
 }
 
+// POSTリクエストの処理
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $instance_id = $_POST['instance_id'] ?? null;
     $action = $_POST['action'] ?? null;
@@ -92,7 +144,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $message = "Force stopped instance {$instance_id} in {$instance_region}";
                         break;
                     case 'modify':
-                        if ($instance_type && in_array($instance_type, ['t3a.medium', 't3a.large'])) {
+                        $instance = array_values(array_filter($instances, function($inst) use ($instance_id) {
+                            return $inst['id'] === $instance_id;
+                        }))[0];
+                        if ($instance_type && ($instance_type === $instance['standard_type'] || $instance_type === $instance['enhanced_type'])) {
                             try {
                                 $client->modifyInstanceAttribute([
                                     'InstanceId' => $instance_id,
@@ -104,6 +159,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
                         } else {
                             $message = "Invalid instance type";
+                        }
+                        break;
+                    case 'toggle_access':
+                        $security_group_id = $_POST['security_group_id'] ?? null;
+                        $allow_access = $_POST['allow_access'] === 'true';
+                        
+                        if ($security_group_id) {
+                            // インスタンスのOSタイプを取得
+                            $instance = array_values(array_filter($instances, function($inst) use ($instance_id) {
+                                return $inst['id'] === $instance_id;
+                            }))[0];
+                            
+                            $port = $instance['os_type'] === 'Windows' ? $rdp_port : 22;
+                            
+                            if ($allow_access) {
+                                // アクセスを許可
+                                $client->authorizeSecurityGroupIngress([
+                                    'GroupId' => $security_group_id,
+                                    'IpPermissions' => [
+                                        [
+                                            'IpProtocol' => 'tcp',
+                                            'FromPort' => $port,
+                                            'ToPort' => $port,
+                                            'IpRanges' => [
+                                                ['CidrIp' => '0.0.0.0/0']
+                                            ]
+                                        ]
+                                    ]
+                                ]);
+                                echo json_encode(['success' => true]);
+                            } else {
+                                // アクセスを拒否
+                                $client->revokeSecurityGroupIngress([
+                                    'GroupId' => $security_group_id,
+                                    'IpPermissions' => [
+                                        [
+                                            'IpProtocol' => 'tcp',
+                                            'FromPort' => $port,
+                                            'ToPort' => $port,
+                                            'IpRanges' => [
+                                                ['CidrIp' => '0.0.0.0/0']
+                                            ]
+                                        ]
+                                    ]
+                                ]);
+                                echo json_encode(['success' => true]);
+                            }
+                            exit;
                         }
                         break;
                     default:
@@ -133,15 +236,14 @@ foreach ($instances as $instance) {
     }
 }
 
-function getRowClass($state, $type) {
+function getRowClass($state, $type, $standardType, $enhancedType) {
     if ($state === 'running') {
-        return $type === 't3a.large' ? 'running-large' : 'running';
+        return $type === $enhancedType ? 'running-large' : 'running';
     } elseif ($state === 'stopped') {
         return 'stopped';
     }
     return '';
 }
-
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -158,7 +260,7 @@ function getRowClass($state, $type) {
             background-color: #f4f4f4;
         }
         .container {
-            max-width: 1000px;
+            max-width: 1200px;
             margin: auto;
             overflow: auto;
             padding: 0 20px;
@@ -167,6 +269,7 @@ function getRowClass($state, $type) {
             width: 100%;
             border-collapse: collapse;
             margin-bottom: 20px;
+            background-color: white;
         }
         th, td {
             text-align: left;
@@ -216,6 +319,12 @@ function getRowClass($state, $type) {
         }
         .stopped {
             background-color: #FF6347;
+        }
+        .btn-connectable {
+            background-color: #4CAF50 !important;
+        }
+        .btn-unconnectable {
+            background-color: #f44336 !important;
         }
         @media (max-width: 600px) {
             table, thead, tbody, th, td, tr {
@@ -268,26 +377,50 @@ function getRowClass($state, $type) {
                     const row = document.querySelector(`tr[data-instance-id="${instanceId}"]`);
                     const stateCell = row.querySelector('td[data-label="State"]');
                     const typeCell = row.querySelector('td[data-label="Type"]');
+                    const standardType = row.dataset.standardType;
+                    const enhancedType = row.dataset.enhancedType;
 
                     stateCell.textContent = data.state;
                     typeCell.textContent = data.type;
 
                     // 行のクラスを更新
-                    row.className = getRowClass(data.state, data.type);
+                    row.className = getRowClass(data.state, data.type, standardType, enhancedType);
                 });
         }
 
-        function getRowClass(state, type) {
+        function getRowClass(state, type, standardType, enhancedType) {
             if (state === 'running') {
-                return type === 't3a.large' ? 'running-large' : 'running';
+                return type === enhancedType ? 'running-large' : 'running';
             } else if (state === 'stopped') {
                 return 'stopped';
             }
             return '';
         }
 
-        // 15秒ごとに全インスタンスの状態を更新
-        setInterval(updateAllInstanceStatuses, 15000);
+        // アクセス状態を更新する関数
+        function updateAccessStatus(button) {
+            const instanceId = button.dataset.instanceId;
+            const region = button.dataset.region;
+            
+            fetch(`index2.php?action=check_access&instance_id=${instanceId}&region=${region}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error(data.error);
+                        return;
+                    }
+                    
+                    button.textContent = data.hasOpenAccess ? 'Unconnectable' : 'Connectable';
+                    button.className = `btn toggle-access ${data.hasOpenAccess ? 'btn-unconnectable' : 'btn-connectable'}`;
+                    button.dataset.securityGroupId = data.securityGroupId;
+                    button.dataset.hasOpenAccess = data.hasOpenAccess;
+                });
+        }
+
+        // すべてのアクセス状態を更新
+        function updateAllAccessStatuses() {
+            document.querySelectorAll('.toggle-access').forEach(updateAccessStatus);
+        }
 
         function modifyInstanceType(instanceId, region, newType) {
             const steps = ['stopping', 'stopped', 'modifying', 'starting', 'running'];
@@ -322,7 +455,6 @@ function getRowClass($state, $type) {
                         } else if (currentStep === 2 && data.state === 'running') {
                             console.log('Instance started. Process complete.');
                             clearInterval(intervalId);
-                            alert(`インスタンス ${instanceId} のタイプが ${newType} に変更され、再起動されました。`);
                         }
                     });
             }
@@ -364,8 +496,16 @@ function getRowClass($state, $type) {
             const intervalId = setInterval(updateStatus, 5000);
         }
 
-        // Modify Type button event listener
+        // 初期化時とポーリング
         document.addEventListener('DOMContentLoaded', function() {
+            updateAllInstanceStatuses();
+            updateAllAccessStatuses();
+            
+            // インスタンスの状態を定期的に更新
+            setInterval(updateAllInstanceStatuses, 15000);
+            setInterval(updateAllAccessStatuses, 15000);
+
+            // Modify Type button event listener
             const forms = document.querySelectorAll('form');
             forms.forEach(form => {
                 form.addEventListener('submit', function(e) {
@@ -377,6 +517,33 @@ function getRowClass($state, $type) {
                         modifyInstanceType(instanceId, region, newType);
                     }
                 });
+            });
+
+            // トグルボタンのクリックイベント
+            document.addEventListener('click', function(e) {
+                if (e.target.classList.contains('toggle-access')) {
+                    const button = e.target;
+                    const instanceId = button.dataset.instanceId;
+                    const securityGroupId = button.dataset.securityGroupId;
+                    const region = button.dataset.region;
+                    const currentlyOpen = button.dataset.hasOpenAccess === 'true';
+                    
+                    fetch('index2.php', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        body: `action=toggle_access&instance_id=${instanceId}&security_group_id=${securityGroupId}&region=${region}&allow_access=${!currentlyOpen}`
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            console.error(data.error);
+                            return;
+                        }
+                        updateAccessStatus(button);
+                    });
+                }
             });
         });
     </script>
@@ -397,6 +564,7 @@ function getRowClass($state, $type) {
                     <th>Name</th>
                     <th>Instance ID</th>
                     <th>Region</th>
+                    <th>OS Type</th>
                     <th>State</th>
                     <th>Type</th>
                     <th>Actions</th>
@@ -407,12 +575,17 @@ function getRowClass($state, $type) {
                     <?php 
                     $state = $instanceStates[$instance['id']]['state'] ?? 'Unknown';
                     $type = $instanceStates[$instance['id']]['type'] ?? 'Unknown';
-                    $rowClass = getRowClass($state, $type);
+                    $rowClass = getRowClass($state, $type, $instance['standard_type'], $instance['enhanced_type']);
                     ?>
-                    <tr class="<?php echo $rowClass; ?>" data-instance-id="<?php echo htmlspecialchars($instance['id']); ?>">
+                    <tr class="<?php echo $rowClass; ?>" 
+                        data-instance-id="<?php echo htmlspecialchars($instance['id']); ?>"
+                        data-standard-type="<?php echo htmlspecialchars($instance['standard_type']); ?>"
+                        data-enhanced-type="<?php echo htmlspecialchars($instance['enhanced_type']); ?>"
+                        data-os-type="<?php echo htmlspecialchars($instance['os_type']); ?>">
                         <td data-label="Name"><?php echo htmlspecialchars($instance['name']); ?></td>
                         <td data-label="Instance ID"><?php echo htmlspecialchars($instance['id']); ?></td>
                         <td data-label="Region"><?php echo htmlspecialchars($instance['region']); ?></td>
+                        <td data-label="OS Type"><?php echo htmlspecialchars($instance['os_type']); ?></td>
                         <td data-label="State"><?php echo htmlspecialchars($state); ?></td>
                         <td data-label="Type"><?php echo htmlspecialchars($type); ?></td>
                         <td data-label="Actions">
@@ -422,10 +595,15 @@ function getRowClass($state, $type) {
                                 <button type="submit" name="action" value="stop" class="btn">Stop</button>
                                 <button type="submit" name="action" value="force-stop" class="btn">Force Stop</button>
                                 <select name="instance_type">
-                                    <option value="t3a.medium">t3a.medium</option>
-                                    <option value="t3a.large">t3a.large</option>
+                                    <option value="<?php echo htmlspecialchars($instance['standard_type']); ?>"><?php echo htmlspecialchars($instance['standard_type']); ?></option>
+                                    <option value="<?php echo htmlspecialchars($instance['enhanced_type']); ?>"><?php echo htmlspecialchars($instance['enhanced_type']); ?></option>
                                 </select>
                                 <button type="submit" name="action" value="modify" class="btn">Modify Type</button>
+                                <button type="button" class="btn toggle-access" 
+                                        data-instance-id="<?php echo htmlspecialchars($instance['id']); ?>"
+                                        data-region="<?php echo htmlspecialchars($instance['region']); ?>">
+                                    Checking...
+                                </button>
                             </form>
                         </td>
                     </tr>
