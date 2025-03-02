@@ -1,7 +1,7 @@
 <?php
 // BASIC認証の設定
-$username = 'XXX';
-$password = 'XXX';
+$username = 'your_username';
+$password = 'your_password';
 if (!isset($_SERVER['PHP_AUTH_USER']) ||
     !isset($_SERVER['PHP_AUTH_PW']) ||
     $_SERVER['PHP_AUTH_USER'] != $username ||
@@ -17,16 +17,19 @@ require 'vendor/autoload.php';
 use Aws\Ec2\Ec2Client;
 
 // AWS認証情報を設定
-$aws_access_key_id = 'XXX';
-$aws_secret_access_key = 'XXX';
+$aws_access_key_id = 'YOUR_AWS_ACCESS_KEY_ID';
+$aws_secret_access_key = 'YOUR_AWS_SECRET_ACCESS_KEY';
 
 // インスタンス情報の設定
-$rdp_port = 3389;  // RDPポートをここで設定
+$rdp_port = 3389;  // RDPの標準ポート
 
-// インスタンス情報にリージョンを追加
+// インスタンス情報にリージョン、標準インスタンスタイプ、増強インスタンスタイプを追加
 $instances = [
-    ['id' => 'i-XXX', 'name' => 'XXX', 'region' => 'ap-northeast-1', 'standard_type' => 'XXX', 'enhanced_type' => 'XXX', 'os_type' => 'Windows'],
-    ['id' => 'i-XXX', 'name' => 'XXX', 'region' => 'ap-northeast-1', 'standard_type' => 'XXX', 'enhanced_type' => 'XXX', 'os_type' => 'Linux']
+    ['id' => 'i-example01', 'name' => 'WindowsServer1', 'region' => 'ap-northeast-1', 'standard_type' => 'm6a.xlarge', 'enhanced_type' => 'm6a.2xlarge', 'os_type' => 'Windows'],
+    ['id' => 'i-example02', 'name' => 'WebServer1', 'region' => 'ap-northeast-1', 'standard_type' => 't3a.medium', 'enhanced_type' => 't3a.large', 'os_type' => 'Linux'],
+    ['id' => 'i-example03', 'name' => 'WebServer2', 'region' => 'ap-northeast-1', 'standard_type' => 't3a.medium', 'enhanced_type' => 't3a.large', 'os_type' => 'Linux'],
+    ['id' => 'i-example04', 'name' => 'LinuxServer1', 'region' => 'us-west-2', 'standard_type' => 't3a.medium', 'enhanced_type' => 't3a.large', 'os_type' => 'Linux'],
+    ['id' => 'i-example05', 'name' => 'LinuxServer2', 'region' => 'us-west-2', 'standard_type' => 't2.small', 'enhanced_type' => 't3.small', 'os_type' => 'Linux']
 ];
 
 $message = '';
