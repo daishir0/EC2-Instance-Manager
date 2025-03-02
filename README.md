@@ -23,7 +23,7 @@ EC2 Instance Manager is an intuitive web interface that allows you to manage AWS
 
 1. Clone or download this repository
    ```
-   git clone https://github.com/yourusername/ec2-instance-manager.git
+   git clone https://github.com/daishir0/ec2-instance-manager.git
    ```
 
 2. Install AWS SDK using Composer:
@@ -121,7 +121,7 @@ EC2 Instance Managerは、AWSのEC2インスタンスを**ワンクリック**�
 
 1. このリポジトリをクローンまたはダウンロードします
    ```
-   git clone https://github.com/yourusername/ec2-instance-manager.git
+   git clone https://github.com/daishir0/ec2-instance-manager.git
    ```
 
 2. Composerを使用してAWS SDKをインストールします:
