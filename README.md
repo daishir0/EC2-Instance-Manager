@@ -1,3 +1,7 @@
+# 🚀 EC2 Instance Manager
+
+EC2 Instance Manager is an intuitive web interface that allows you to manage AWS EC2 instances with **one click**. You can efficiently manage multiple EC2 instances from a simple dashboard without having to navigate the complex AWS console or remember CLI commands. It significantly reduces the time and effort required for AWS management by making cost optimization, security management, and resource monitoring easy.
+
 ## 💡 Key Features and Benefits
 
 - **Simple Instance Management**: Start, stop, and force stop EC2 instances with one click without opening the complex AWS console
